@@ -407,7 +407,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     };
 
     return (
-        <div className="flex flex-col md:flex-row h-[calc(100vh-116px)] overflow-hidden">
+        <div className="flex flex-col md:flex-row h-[calc(100dvh-116px)] overflow-hidden">
             {/* MAP */}
             <div className={`w-full md:w-[60%] transition-all duration-300 relative z-0 shadow-md order-1 md:order-1 overflow-hidden pointer-events-auto ${isMapCollapsed ? 'h-0 opacity-0' : 'h-[32%] md:h-full'}`}>
                 <div
@@ -490,6 +490,15 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                     className="flex-1 overflow-y-auto p-2 space-y-2"
                     onScroll={(e) => {
                         const currentScrollY = e.currentTarget.scrollTop;
+                        
+                        // Xử lý rubber-banding (kéo lố) trên iOS
+                        if (currentScrollY <= 0) {
+                            setShowListHeader(true); // Luôn hiện khi ở trên cùng
+                            return;
+                        }
+                        // Bỏ qua khi scroll lố ở dưới cùng
+                        if (currentScrollY + e.currentTarget.clientHeight >= e.currentTarget.scrollHeight) return;
+
                         if (currentScrollY > lastListScrollY.current + 10) {
                             setShowListHeader(false); // Hide on scroll down
                         } else if (currentScrollY < lastListScrollY.current - 10) {
