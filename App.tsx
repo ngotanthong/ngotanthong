@@ -463,23 +463,25 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
 
             {/* LIST */}
             <div className={`w-full md:w-[40%] transition-all duration-300 bg-gray-50 flex flex-col border-l border-gray-200 order-2 md:order-2 shadow-inner relative z-10 ${isMapCollapsed ? 'h-full' : 'h-[68%] md:h-full'}`}>
-                <div className="p-2.5 md:p-3 bg-white border-b shadow-sm flex items-center justify-between">
-                    <h3 className="font-bold text-gray-700 flex items-center gap-2 text-sm md:text-base">
-                        <MapPin size={16} className="text-blue-600" />
-                        Cần thu gần bạn ({sortedBills.length})
+                <div className="px-2.5 py-1.5 md:p-3 bg-white border-b shadow-sm flex items-center justify-between gap-2">
+                    <h3 className="font-bold text-gray-700 flex items-center gap-1.5 text-sm md:text-base min-w-0">
+                        <MapPin size={15} className="text-blue-600 shrink-0" />
+                        <span className="truncate">Cần thu ({sortedBills.length})</span>
                         {sortedBills.length > MAX_MAP_MARKERS && (
-                            <span className="text-[10px] font-normal text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
-                                📍 {MAX_MAP_MARKERS} gần nhất
+                            <span
+                                className="shrink-0 text-[10px] font-bold text-orange-500 bg-orange-50 w-6 h-6 rounded-full border border-orange-200 flex items-center justify-center"
+                                title={`Chỉ hiển thị ${MAX_MAP_MARKERS} điểm gần nhất trên bản đồ`}
+                            >
+                                {MAX_MAP_MARKERS}
                             </span>
                         )}
                     </h3>
                     <button
                         onClick={() => setIsMapCollapsed(!isMapCollapsed)}
-                        className="md:hidden flex items-center gap-1 text-xs text-blue-600 font-bold bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded border border-blue-200 transition-colors shadow-sm"
+                        className="md:hidden shrink-0 w-8 h-8 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors shadow-sm"
                         title={isMapCollapsed ? "Hiện bản đồ" : "Ẩn bản đồ"}
                     >
-                        {isMapCollapsed ? <MapIcon size={12} /> : <EyeOff size={12} />}
-                        {isMapCollapsed ? "Hiện Bản đồ" : "Ẩn Bản đồ"}
+                        {isMapCollapsed ? <MapIcon size={15} /> : <EyeOff size={15} />}
                     </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2 space-y-2">
