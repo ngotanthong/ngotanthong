@@ -79,12 +79,13 @@ interface MapTabProps {
     onEditBill: (bill: Bill) => void;
     onUpdateBill: (id: string, updates: Partial<Bill>) => void;
     onPrintQR: (bill: Bill) => void;
+    onScrollDirection?: (dir: 'up' | 'down' | 'top') => void;
 }
 
 // Giới hạn số markers trên bản đồ để tối ưu hiệu suất mobile
 const MAX_MAP_MARKERS = 50;
 
-const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR }) => {
+const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR, onScrollDirection }) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const leafletMap = useRef<L.Map | null>(null);
     const markersRef = useRef<{ marker: L.CircleMarker; bill: Bill & { distance: number; lat: number; lng: number } }[]>([]);
@@ -494,6 +495,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                         // Xử lý rubber-banding (kéo lố) trên iOS
                         if (currentScrollY <= 0) {
                             setShowListHeader(true); // Luôn hiện khi ở trên cùng
+                            onScrollDirection?.('top');
                             return;
                         }
                         // Bỏ qua khi scroll lố ở dưới cùng
@@ -501,8 +503,10 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
 
                         if (currentScrollY > lastListScrollY.current + 10) {
                             setShowListHeader(false); // Hide on scroll down
+                            onScrollDirection?.('down');
                         } else if (currentScrollY < lastListScrollY.current - 10) {
                             setShowListHeader(true);  // Show on scroll up
+                            onScrollDirection?.('up');
                         }
                         lastListScrollY.current = currentScrollY;
                     }}
@@ -1396,7 +1400,7 @@ const App: React.FC = () => {
 
             <div className="flex-1 relative">
                 {activeTab === 'report' ? <Dashboard bills={bills} /> : activeTab === 'map' ? (
-                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} />
+                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} onScrollDirection={(dir) => setShowHeader(dir === 'up' || dir === 'top')} />
                 ) : (
                     <main className="max-w-full pb-20 overflow-x-auto">
                         <div className="bg-white border-b border-gray-200">
