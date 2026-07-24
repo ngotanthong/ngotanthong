@@ -408,6 +408,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     };
 
     const accumScrollDelta = useRef(0);
+    const lastStateChangeTime = useRef(0);
 
     return (
         <div className={`flex flex-col md:flex-row transition-all duration-300 overflow-hidden ${showListHeader ? 'h-[calc(100dvh-116px)]' : 'h-[100dvh] md:h-[calc(100vh-116px)]'}`}>
@@ -499,12 +500,17 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                         const delta = currentScrollY - lastListScrollY.current;
                         lastListScrollY.current = currentScrollY;
 
-                        // Luôn hiện khi cuộn lên gần đầu trang (< 20px)
-                        if (currentScrollY <= 20) {
+                        const now = Date.now();
+                        // Cooldown 600ms giữa các lần đổi trạng thái để tránh giật lag do quán tính cuộn iPhone
+                        const isCoolingDown = now - lastStateChangeTime.current < 600;
+
+                        // Luôn hiện khi cuộn về sát đỉnh đầu trang (scrollTop <= 5px)
+                        if (currentScrollY <= 5) {
                             accumScrollDelta.current = 0;
-                            if (!showListHeader) {
+                            if (!showListHeader && !isCoolingDown) {
                                 setShowListHeader(true);
                                 onScrollDirection?.('top');
+                                lastStateChangeTime.current = now;
                             }
                             return;
                         }
@@ -518,19 +524,23 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                         }
                         accumScrollDelta.current += delta;
 
-                        // Yêu cầu kéo XUỐNG dài liên tục > 70px mới ẩn
-                        if (accumScrollDelta.current > 70) {
+                        if (isCoolingDown) return;
+
+                        // Yêu cầu kéo XUỐNG rất dài (> 120px) mới ẩn
+                        if (accumScrollDelta.current > 120) {
                             if (showListHeader) {
                                 setShowListHeader(false);
                                 onScrollDirection?.('down');
+                                lastStateChangeTime.current = now;
                             }
                             accumScrollDelta.current = 0;
                         } 
-                        // Yêu cầu kéo LÊN dài liên tục > 90px mới hiện lại
-                        else if (accumScrollDelta.current < -90) {
+                        // Yêu cầu kéo LÊN rất dài (> 220px) mới hiện lại
+                        else if (accumScrollDelta.current < -220) {
                             if (!showListHeader) {
                                 setShowListHeader(true);
                                 onScrollDirection?.('up');
+                                lastStateChangeTime.current = now;
                             }
                             accumScrollDelta.current = 0;
                         }
