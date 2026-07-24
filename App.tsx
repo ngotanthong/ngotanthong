@@ -81,12 +81,17 @@ interface MapTabProps {
     onPrintQR: (bill: Bill) => void;
 }
 
+// Giới hạn số markers trên bản đồ để tối ưu hiệu suất mobile
+const MAX_MAP_MARKERS = 50;
+
 const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR }) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const leafletMap = useRef<L.Map | null>(null);
-    const markersRef = useRef<L.CircleMarker[]>([]);
+    const markersRef = useRef<{ marker: L.CircleMarker; bill: Bill & { distance: number; lat: number; lng: number } }[]>([]);
     const userMarkerRef = useRef<L.Marker | null>(null); // Ref for user marker
     const labelLayerRef = useRef<L.LayerGroup | null>(null); // Layer group for label visibility control
+    const prevSelectedIdRef = useRef<string | null>(null); // Track previous selection for efficient style update
+    const markerRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Debounce timer
     const [sortedBills, setSortedBills] = useState<(Bill & { distance: number, lat: number, lng: number })[]>([]);
     const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
     const [isFollowing, setIsFollowing] = useState(true); // Auto-center state
@@ -144,18 +149,17 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             attribution: mapType === 'street' ? '&copy; OpenStreetMap contributors' : 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
         }).addTo(map);
 
-        // Zoom-based label visibility
+        // Zoom-based label visibility — chỉ hiện labels khi zoom >= 14 để giảm tải DOM trên mobile
         const updateLabelVisibility = () => {
             if (!labelLayerRef.current) return;
             const zoom = map.getZoom();
-            const labelContainer = (labelLayerRef.current as any)._map;
-            // Show labels when zoom >= 13, hide when zoomed out too far
-            if (zoom >= 13) {
+            // Tăng ngưỡng lên 14 để giảm số DOM nodes khi nhìn tổng quan
+            if (zoom >= 14) {
                 if (!map.hasLayer(labelLayerRef.current)) {
                     map.addLayer(labelLayerRef.current);
                 }
                 // Scale font based on zoom
-                const scale = Math.max(0.7, Math.min(1.2, (zoom - 12) * 0.15 + 0.7));
+                const scale = Math.max(0.7, Math.min(1.2, (zoom - 13) * 0.2 + 0.7));
                 document.documentElement.style.setProperty('--bill-label-scale', String(scale));
             } else {
                 if (map.hasLayer(labelLayerRef.current)) {
@@ -254,79 +258,125 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
         }
     }, [userLocation, isFollowing]);
 
-    // 4. Update Bill Markers (lightweight circleMarker + permanent tooltip labels)
+    // 4. Update Bill Markers — Tách thành 2 effect riêng biệt:
+    //    a) Full redraw khi sortedBills thay đổi (debounced)
+    //    b) Chỉ update style khi selectedBillId thay đổi (không redraw)
+
+    // 4a. Full redraw markers khi danh sách thay đổi
     useEffect(() => {
         if (!leafletMap.current || !labelLayerRef.current) return;
         const map = leafletMap.current;
         const labelLayer = labelLayerRef.current;
 
-        // Clear old markers and labels
-        markersRef.current.forEach(m => m.remove());
-        markersRef.current = [];
-        labelLayer.clearLayers();
+        // Debounce 150ms để tránh render liên tục khi data thay đổi nhanh
+        if (markerRenderTimerRef.current) clearTimeout(markerRenderTimerRef.current);
+        markerRenderTimerRef.current = setTimeout(() => {
+            // Clear old markers and labels
+            markersRef.current.forEach(({ marker }) => marker.remove());
+            markersRef.current = [];
+            labelLayer.clearLayers();
 
-        sortedBills.forEach(bill => {
-            const isSelected = bill.id === selectedBillId;
-            let color = '#ea580c';
-            let radius = 7;
-            let weight = 2;
+            // Giới hạn số lượng markers để tối ưu hiệu suất mobile
+            const billsToRender = sortedBills.slice(0, MAX_MAP_MARKERS);
 
-            if (isSelected) {
-                color = '#ef4444';
-                radius = 11;
-                weight = 3;
-            } else if (bill.status && bill.status.length > 0) {
-                color = '#7c3aed';
+            billsToRender.forEach(bill => {
+                const isSelected = bill.id === selectedBillId;
+                let color = '#ea580c';
+                let radius = 7;
+                let weight = 2;
+
+                if (isSelected) {
+                    color = '#ef4444';
+                    radius = 11;
+                    weight = 3;
+                } else if (bill.status && bill.status.length > 0) {
+                    color = '#7c3aed';
+                }
+
+                // Use circleMarker (SVG-based, very performant)
+                const marker = L.circleMarker([bill.lat, bill.lng], {
+                    radius,
+                    fillColor: color,
+                    color: '#fff',
+                    weight,
+                    opacity: 1,
+                    fillOpacity: 0.9,
+                }).addTo(map);
+
+                // Permanent tooltip label (subscriber name always visible)
+                const labelText = bill.customerName.length > 16
+                    ? bill.customerName.substring(0, 15) + '…'
+                    : bill.customerName;
+
+                const tooltipClasses = `bill-label${isSelected ? ' bill-label--selected' : ''}${bill.status ? ' bill-label--status' : ''}`;
+
+                const tooltip = L.tooltip({
+                    permanent: true,
+                    direction: 'top',
+                    offset: [0, -radius - 2],
+                    className: tooltipClasses,
+                    interactive: false,
+                });
+                tooltip.setContent(labelText);
+
+                // Add tooltip to label layer group (for zoom-based show/hide)
+                const labelMarker = L.marker([bill.lat, bill.lng], {
+                    icon: L.divIcon({ className: 'bill-label-anchor', iconSize: [0, 0] }),
+                    interactive: false,
+                });
+                labelMarker.bindTooltip(tooltip);
+                labelLayer.addLayer(labelMarker);
+
+                marker.on('click', () => {
+                    setSelectedBillId(bill.id);
+                    setIsFollowing(false);
+                    document.getElementById(`bill-card-${bill.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+                markersRef.current.push({ marker, bill });
+            });
+
+            prevSelectedIdRef.current = selectedBillId;
+
+            // Initial fit bounds if not following user and no selection
+            if (markersRef.current.length > 0 && !selectedBillId && !userLocation) {
+                const group = L.featureGroup(markersRef.current.map(m => m.marker));
+                map.fitBounds(group.getBounds(), { padding: [50, 50] });
             }
+        }, 150);
 
-            // Use circleMarker (SVG-based, very performant)
-            const marker = L.circleMarker([bill.lat, bill.lng], {
-                radius,
-                fillColor: color,
-                color: '#fff',
-                weight,
-                opacity: 1,
-                fillOpacity: 0.9,
-            }).addTo(map);
+        return () => {
+            if (markerRenderTimerRef.current) clearTimeout(markerRenderTimerRef.current);
+        };
+    }, [sortedBills]); // eslint-disable-line react-hooks/exhaustive-deps
 
-            // Permanent tooltip label (subscriber name always visible)
-            const labelText = bill.customerName.length > 16
-                ? bill.customerName.substring(0, 15) + '…'
-                : bill.customerName;
+    // 4b. Chỉ update style markers khi selection thay đổi (không cần redraw toàn bộ)
+    useEffect(() => {
+        const prevId = prevSelectedIdRef.current;
+        if (prevId === selectedBillId) return;
 
-            const tooltipClasses = `bill-label${isSelected ? ' bill-label--selected' : ''}${bill.status ? ' bill-label--status' : ''}`;
-
-            const tooltip = L.tooltip({
-                permanent: true,
-                direction: 'top',
-                offset: [0, -radius - 2],
-                className: tooltipClasses,
-                interactive: false,
-            });
-            tooltip.setContent(labelText);
-
-            // Add tooltip to label layer group (for zoom-based show/hide)
-            const labelMarker = L.marker([bill.lat, bill.lng], {
-                icon: L.divIcon({ className: 'bill-label-anchor', iconSize: [0, 0] }),
-                interactive: false,
-            });
-            labelMarker.bindTooltip(tooltip);
-            labelLayer.addLayer(labelMarker);
-
-            marker.on('click', () => {
-                setSelectedBillId(bill.id);
-                setIsFollowing(false);
-                document.getElementById(`bill-card-${bill.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            });
-            markersRef.current.push(marker);
-        });
-
-        // Initial fit bounds if not following user and no selection
-        if (markersRef.current.length > 0 && !selectedBillId && !userLocation) {
-            const group = L.featureGroup(markersRef.current);
-            map.fitBounds(group.getBounds(), { padding: [50, 50] });
+        // Bỏ chọn marker cũ
+        if (prevId !== null) {
+            const prevEntry = markersRef.current.find(({ bill }) => bill.id === prevId);
+            if (prevEntry) {
+                const { marker, bill } = prevEntry;
+                const color = bill.status ? '#7c3aed' : '#ea580c';
+                marker.setStyle({ fillColor: color, radius: 7, weight: 2 });
+                (marker as any).setRadius(7);
+            }
         }
-    }, [sortedBills, selectedBillId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+        // Highlight marker mới được chọn
+        if (selectedBillId !== null) {
+            const newEntry = markersRef.current.find(({ bill }) => bill.id === selectedBillId);
+            if (newEntry) {
+                const { marker } = newEntry;
+                marker.setStyle({ fillColor: '#ef4444', weight: 3 });
+                (marker as any).setRadius(11);
+            }
+        }
+
+        prevSelectedIdRef.current = selectedBillId;
+    }, [selectedBillId]);
 
     const handleCardClick = (bill: Bill & { lat: number, lng: number }) => {
         setSelectedBillId(bill.id);
@@ -417,6 +467,11 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                     <h3 className="font-bold text-gray-700 flex items-center gap-2 text-sm md:text-base">
                         <MapPin size={16} className="text-blue-600" />
                         Cần thu gần bạn ({sortedBills.length})
+                        {sortedBills.length > MAX_MAP_MARKERS && (
+                            <span className="text-[10px] font-normal text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
+                                📍 {MAX_MAP_MARKERS} gần nhất
+                            </span>
+                        )}
                     </h3>
                     <button
                         onClick={() => setIsMapCollapsed(!isMapCollapsed)}
