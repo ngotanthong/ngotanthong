@@ -98,6 +98,8 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     const [mapType, setMapType] = useState<'street' | 'satellite'>('street');
     const tileLayerRef = useRef<L.TileLayer | null>(null);
     const [isMapCollapsed, setIsMapCollapsed] = useState(false);
+    const [showListHeader, setShowListHeader] = useState(true);
+    const lastListScrollY = useRef(0);
 
     // Invalidate Leaflet Map size khi đóng/mở rộng bản đồ để chống xám hình
     useEffect(() => {
@@ -463,7 +465,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
 
             {/* LIST */}
             <div className={`w-full md:w-[40%] transition-all duration-300 bg-gray-50 flex flex-col border-l border-gray-200 order-2 md:order-2 shadow-inner relative z-10 ${isMapCollapsed ? 'h-full' : 'h-[68%] md:h-full'}`}>
-                <div className="px-2.5 py-1.5 md:p-3 bg-white border-b shadow-sm flex items-center justify-between gap-2">
+                <div className={`bg-white border-b shadow-sm flex items-center justify-between gap-2 overflow-hidden transition-all duration-300 ${showListHeader ? 'px-2.5 py-1.5 md:p-3 max-h-20 opacity-100' : 'max-h-0 opacity-0 border-transparent py-0 px-2.5 md:px-3'}`}>
                     <h3 className="font-bold text-gray-700 flex items-center gap-1.5 text-sm md:text-base min-w-0">
                         <MapPin size={15} className="text-blue-600 shrink-0" />
                         <span className="truncate">Cần thu ({sortedBills.length})</span>
@@ -484,7 +486,18 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                         {isMapCollapsed ? <MapIcon size={15} /> : <EyeOff size={15} />}
                     </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                <div 
+                    className="flex-1 overflow-y-auto p-2 space-y-2"
+                    onScroll={(e) => {
+                        const currentScrollY = e.currentTarget.scrollTop;
+                        if (currentScrollY > lastListScrollY.current + 10) {
+                            setShowListHeader(false); // Hide on scroll down
+                        } else if (currentScrollY < lastListScrollY.current - 10) {
+                            setShowListHeader(true);  // Show on scroll up
+                        }
+                        lastListScrollY.current = currentScrollY;
+                    }}
+                >
                     {sortedBills.length === 0 ? (
                         <div className="text-center p-8 text-gray-400 text-sm">
                             <p className="mb-2">Tuyệt vời! Không còn hóa đơn nào cần thu ở các vị trí đã định vị.</p>
