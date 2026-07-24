@@ -106,7 +106,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     useEffect(() => {
         if (leafletMap.current) {
             const timer = setTimeout(() => {
-                leafletMap.current?.invalidateSize({ animate: true });
+                leafletMap.current?.invalidateSize({ animate: false });
             }, 350);
             return () => clearTimeout(timer);
         }
@@ -407,8 +407,10 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
         onUpdateBill(id, { note: value });
     };
 
+    const accumScrollDelta = useRef(0);
+
     return (
-        <div className={`flex flex-col md:flex-row transition-all duration-300 overflow-hidden ${showListHeader ? 'h-[calc(100dvh-116px)]' : 'h-[100dvh]'}`}>
+        <div className={`flex flex-col md:flex-row transition-all duration-300 overflow-hidden ${showListHeader ? 'h-[calc(100dvh-116px)]' : 'h-[100dvh] md:h-[calc(100vh-116px)]'}`}>
             {/* MAP */}
             <div className={`w-full md:w-[60%] transition-all duration-300 relative z-0 shadow-md order-1 md:order-1 overflow-hidden pointer-events-auto ${isMapCollapsed ? 'h-0 opacity-0' : 'h-[32%] md:h-full'}`}>
                 <div
@@ -490,25 +492,48 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                 <div 
                     className="flex-1 overflow-y-auto p-2 space-y-2"
                     onScroll={(e) => {
+                        // Không tự động ẩn header trên PC (chỉ áp dụng trên Mobile < 768px)
+                        if (window.innerWidth >= 768) return;
+
                         const currentScrollY = e.currentTarget.scrollTop;
-                        
-                        // Xử lý rubber-banding (kéo lố) trên iOS
-                        if (currentScrollY <= 0) {
-                            setShowListHeader(true); // Luôn hiện khi ở trên cùng
-                            onScrollDirection?.('top');
+                        const delta = currentScrollY - lastListScrollY.current;
+                        lastListScrollY.current = currentScrollY;
+
+                        // Luôn hiện khi cuộn lên gần đầu trang (< 20px)
+                        if (currentScrollY <= 20) {
+                            accumScrollDelta.current = 0;
+                            if (!showListHeader) {
+                                setShowListHeader(true);
+                                onScrollDirection?.('top');
+                            }
                             return;
                         }
-                        // Bỏ qua khi scroll lố ở dưới cùng
-                        if (currentScrollY + e.currentTarget.clientHeight >= e.currentTarget.scrollHeight) return;
+                        
+                        // Bỏ qua khi cuộn lố ở cuối trang (iOS rubber-banding)
+                        if (currentScrollY + e.currentTarget.clientHeight >= e.currentTarget.scrollHeight - 10) return;
 
-                        if (currentScrollY > lastListScrollY.current + 10) {
-                            setShowListHeader(false); // Hide on scroll down
-                            onScrollDirection?.('down');
-                        } else if (currentScrollY < lastListScrollY.current - 10) {
-                            setShowListHeader(true);  // Show on scroll up
-                            onScrollDirection?.('up');
+                        // Đổi hướng cuộn => reset tích lũy
+                        if ((delta > 0 && accumScrollDelta.current < 0) || (delta < 0 && accumScrollDelta.current > 0)) {
+                            accumScrollDelta.current = 0;
                         }
-                        lastListScrollY.current = currentScrollY;
+                        accumScrollDelta.current += delta;
+
+                        // Yêu cầu kéo XUỐNG dài liên tục > 70px mới ẩn
+                        if (accumScrollDelta.current > 70) {
+                            if (showListHeader) {
+                                setShowListHeader(false);
+                                onScrollDirection?.('down');
+                            }
+                            accumScrollDelta.current = 0;
+                        } 
+                        // Yêu cầu kéo LÊN dài liên tục > 90px mới hiện lại
+                        else if (accumScrollDelta.current < -90) {
+                            if (!showListHeader) {
+                                setShowListHeader(true);
+                                onScrollDirection?.('up');
+                            }
+                            accumScrollDelta.current = 0;
+                        }
                     }}
                 >
                     {sortedBills.length === 0 ? (
@@ -1319,7 +1344,7 @@ const App: React.FC = () => {
             <input type="file" accept=".xlsx, .xls" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
             <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} config={sheetConfig} onSave={(newConfig) => { setSheetConfig(newConfig); saveSheetConfig(newConfig); if (newConfig.enabled && newConfig.url !== sheetConfig.url) window.location.reload(); }} />
 
-            <div className={`sticky top-0 z-50 shadow-md bg-white transition-all duration-300 ease-in-out overflow-hidden ${showHeader ? 'max-h-[250px] opacity-100' : 'max-h-0 opacity-0 border-transparent'}`}>
+            <div className={`sticky top-0 z-50 shadow-md bg-white transition-all duration-300 ease-in-out overflow-hidden ${showHeader ? 'max-h-[250px] opacity-100' : 'max-h-0 opacity-0 md:max-h-[250px] md:opacity-100 border-transparent'}`}>
                 <header className="bg-blue-700 text-white p-2 md:p-3">
                     <div className="max-w-7xl mx-auto flex items-center justify-between">
                         <div className="flex items-center gap-1 md:gap-2">
