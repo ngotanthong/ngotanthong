@@ -102,7 +102,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     const [showListHeader, setShowListHeader] = useState(true);
     const lastListScrollY = useRef(0);
 
-    // Invalidate Leaflet Map size khi đóng/mở rộng bản đồ để chống xám hình
+    // Invalidate Leaflet Map size khi đóng/mở rộng bản đồ hoặc ẩn/hiện header để chống xám hình
     useEffect(() => {
         if (leafletMap.current) {
             const timer = setTimeout(() => {
@@ -110,7 +110,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             }, 350);
             return () => clearTimeout(timer);
         }
-    }, [isMapCollapsed]);
+    }, [isMapCollapsed, showListHeader]);
 
     // 1. Calculate Distances & Filter
     useEffect(() => {
@@ -408,7 +408,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     };
 
     return (
-        <div className="flex flex-col md:flex-row h-[calc(100dvh-116px)] overflow-hidden">
+        <div className={`flex flex-col md:flex-row transition-all duration-300 overflow-hidden ${showListHeader ? 'h-[calc(100dvh-116px)]' : 'h-[100dvh]'}`}>
             {/* MAP */}
             <div className={`w-full md:w-[60%] transition-all duration-300 relative z-0 shadow-md order-1 md:order-1 overflow-hidden pointer-events-auto ${isMapCollapsed ? 'h-0 opacity-0' : 'h-[32%] md:h-full'}`}>
                 <div
@@ -1319,7 +1319,7 @@ const App: React.FC = () => {
             <input type="file" accept=".xlsx, .xls" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
             <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} config={sheetConfig} onSave={(newConfig) => { setSheetConfig(newConfig); saveSheetConfig(newConfig); if (newConfig.enabled && newConfig.url !== sheetConfig.url) window.location.reload(); }} />
 
-            <div className={`sticky top-0 z-50 shadow-md bg-white transition-transform duration-300 ease-in-out ${showHeader ? 'translate-y-0' : '-translate-y-full'}`}>
+            <div className={`sticky top-0 z-50 shadow-md bg-white transition-all duration-300 ease-in-out overflow-hidden ${showHeader ? 'max-h-[250px] opacity-100' : 'max-h-0 opacity-0 border-transparent'}`}>
                 <header className="bg-blue-700 text-white p-2 md:p-3">
                     <div className="max-w-7xl mx-auto flex items-center justify-between">
                         <div className="flex items-center gap-1 md:gap-2">
