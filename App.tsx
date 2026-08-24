@@ -152,26 +152,41 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
         labelLayerRef.current = L.layerGroup().addTo(map);
 
         // Initial Tile Layer
-        const streetUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-        const satelliteUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+        const getTileConfig = (type: 'street' | 'satellite') => {
+            if (type === 'street') {
+                return {
+                    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                    options: {
+                        subdomains: 'abcd',
+                        maxZoom: 20,
+                        detectRetina: true,
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                    }
+                };
+            }
+            return {
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                options: {
+                    maxZoom: 19,
+                    detectRetina: true,
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                }
+            };
+        };
 
-        tileLayerRef.current = L.tileLayer(mapType === 'street' ? streetUrl : satelliteUrl, {
-            attribution: mapType === 'street' ? '&copy; OpenStreetMap contributors' : 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-        }).addTo(map);
+        const initialConfig = getTileConfig(mapType);
+        tileLayerRef.current = L.tileLayer(initialConfig.url, initialConfig.options).addTo(map);
 
         // Zoom-based label visibility — chỉ hiện labels khi zoom >= 14 để giảm tải DOM trên mobile
         const updateLabelVisibility = () => {
             if (!labelLayerRef.current) return;
             const zoom = map.getZoom();
-            // Tăng ngưỡng lên 14 để giảm số DOM nodes khi nhìn tổng quan
             if (zoom >= 14) {
                 if (!map.hasLayer(labelLayerRef.current)) {
                     map.addLayer(labelLayerRef.current);
                 }
-                // Scale font based on zoom
                 const scale = Math.max(0.7, Math.min(1.2, (zoom - 13) * 0.2 + 0.7));
                 document.documentElement.style.setProperty('--bill-label-scale', String(scale));
-                // Resolve overlapping labels sau khi zoom
                 requestAnimationFrame(() => resolveOverlaps(map));
             } else {
                 if (map.hasLayer(labelLayerRef.current)) {
@@ -193,9 +208,16 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             if (typeof onCancelCompass === 'function') onCancelCompass();
         });
 
+        // Window resize listener
+        const handleResize = () => {
+            leafletMap.current?.invalidateSize({ animate: false });
+        };
+        window.addEventListener('resize', handleResize);
+
         const timer = setTimeout(() => { map.invalidateSize(); }, 200);
         return () => {
             clearTimeout(timer);
+            window.removeEventListener('resize', handleResize);
             if (leafletMap.current) {
                 leafletMap.current.remove();
                 leafletMap.current = null;
@@ -208,10 +230,11 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     useEffect(() => {
         if (!leafletMap.current || !tileLayerRef.current) return;
 
-        const streetUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-        const satelliteUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-
-        tileLayerRef.current.setUrl(mapType === 'street' ? streetUrl : satelliteUrl);
+        if (mapType === 'street') {
+            tileLayerRef.current.setUrl('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png');
+        } else {
+            tileLayerRef.current.setUrl('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
+        }
     }, [mapType]);
 
     // 3. Update User Marker Live & Auto Center
@@ -491,9 +514,9 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                     className="w-full h-full bg-gray-200"
                     style={{
                         transform: compassMode && userLocation?.heading ? `rotate(${-(userLocation.heading)}deg) scale(1.2)` : 'none',
-                        transition: 'transform 0.4s ease-out',
+                        transition: compassMode ? 'transform 0.4s ease-out' : 'none',
                         transformOrigin: '50% 50%',
-                        willChange: 'transform',
+                        willChange: compassMode && userLocation?.heading ? 'transform' : 'auto',
                     }}
                 />
 
