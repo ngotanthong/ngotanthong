@@ -79,13 +79,22 @@ interface MapTabProps {
     onEditBill: (bill: Bill) => void;
     onUpdateBill: (id: string, updates: Partial<Bill>) => void;
     onPrintQR: (bill: Bill) => void;
-    onScrollDirection?: (dir: 'up' | 'down' | 'top') => void;
 }
 
 // Giới hạn số markers trên bản đồ để tối ưu hiệu suất mobile
-const MAX_MAP_MARKERS = 50;
+const MAX_MAP_MARKERS = typeof window !== 'undefined' && window.innerWidth < 768 ? 40 : 50;
 
-const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR, onScrollDirection }) => {
+// Kiểm tra 2 rect có overlap không (collision detection)
+const rectsOverlap = (a: DOMRect, b: DOMRect, padding: number = 2): boolean => {
+    return !(
+        a.right + padding < b.left ||
+        b.right + padding < a.left ||
+        a.bottom + padding < b.top ||
+        b.bottom + padding < a.top
+    );
+};
+
+const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR }) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const leafletMap = useRef<L.Map | null>(null);
     const markersRef = useRef<{ marker: L.CircleMarker; bill: Bill & { distance: number; lat: number; lng: number } }[]>([]);
@@ -99,10 +108,8 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
     const [mapType, setMapType] = useState<'street' | 'satellite'>('street');
     const tileLayerRef = useRef<L.TileLayer | null>(null);
     const [isMapCollapsed, setIsMapCollapsed] = useState(false);
-    const [showListHeader, setShowListHeader] = useState(true);
-    const lastListScrollY = useRef(0);
 
-    // Invalidate Leaflet Map size khi đóng/mở rộng bản đồ hoặc ẩn/hiện header để chống xám hình
+    // Invalidate Leaflet Map size khi đóng/mở rộng bản đồ để chống xám hình
     useEffect(() => {
         if (leafletMap.current) {
             const timer = setTimeout(() => {
@@ -110,7 +117,7 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             }, 350);
             return () => clearTimeout(timer);
         }
-    }, [isMapCollapsed, showListHeader]);
+    }, [isMapCollapsed]);
 
     // 1. Calculate Distances & Filter
     useEffect(() => {
@@ -164,6 +171,8 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                 // Scale font based on zoom
                 const scale = Math.max(0.7, Math.min(1.2, (zoom - 13) * 0.2 + 0.7));
                 document.documentElement.style.setProperty('--bill-label-scale', String(scale));
+                // Resolve overlapping labels sau khi zoom
+                requestAnimationFrame(() => resolveOverlaps(map));
             } else {
                 if (map.hasLayer(labelLayerRef.current)) {
                     map.removeLayer(labelLayerRef.current);
@@ -171,6 +180,11 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             }
         };
         map.on('zoomend', updateLabelVisibility);
+        map.on('moveend', () => {
+            if (map.getZoom() >= 14) {
+                requestAnimationFrame(() => resolveOverlaps(map));
+            }
+        });
         updateLabelVisibility();
 
         // Disable follow on drag
@@ -345,6 +359,11 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
                 const group = L.featureGroup(markersRef.current.map(m => m.marker));
                 map.fitBounds(group.getBounds(), { padding: [50, 50] });
             }
+
+            // Resolve overlapping labels sau khi render markers
+            if (map.getZoom() >= 14) {
+                requestAnimationFrame(() => resolveOverlaps(map));
+            }
         }, 150);
 
         return () => {
@@ -407,20 +426,74 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
         onUpdateBill(id, { note: value });
     };
 
-    const accumScrollDelta = useRef(0);
-    const lastStateChangeTime = useRef(0);
+    // Collision detection: ẩn labels bị chồng lên nhau, ưu tiên giữ selected > status > normal
+    const resolveOverlaps = (map: L.Map) => {
+        if (!labelLayerRef.current || !map) return;
+        const mapBounds = map.getBounds();
+
+        const labelEntries: { layer: any; el: HTMLElement; rect: DOMRect; priority: number }[] = [];
+
+        labelLayerRef.current.eachLayer((layer: any) => {
+            const latlng = layer.getLatLng?.();
+            if (!latlng) return;
+
+            const tooltip = layer.getTooltip?.();
+            const el = tooltip?.getElement?.() as HTMLElement | null;
+            if (!el) return;
+
+            // Ẩn labels ngoài viewport
+            if (!mapBounds.contains(latlng)) {
+                el.style.visibility = 'hidden';
+                return;
+            }
+
+            // Reset visibility trước khi check overlap
+            el.style.visibility = 'visible';
+            const rect = el.getBoundingClientRect();
+
+            // Determine priority: selected = 3, status = 2, normal = 1
+            const classes = el.className || '';
+            let priority = 1;
+            if (classes.includes('bill-label--selected')) priority = 3;
+            else if (classes.includes('bill-label--status')) priority = 2;
+
+            labelEntries.push({ layer, el, rect, priority });
+        });
+
+        // Sort by priority descending (higher priority = keep)
+        labelEntries.sort((a, b) => b.priority - a.priority);
+
+        // Greedy collision: giữ label priority cao, ẩn label priority thấp bị chồng
+        const kept: DOMRect[] = [];
+        for (const entry of labelEntries) {
+            let overlapping = false;
+            for (const keptRect of kept) {
+                if (rectsOverlap(entry.rect, keptRect)) {
+                    overlapping = true;
+                    break;
+                }
+            }
+            if (overlapping) {
+                entry.el.style.visibility = 'hidden';
+            } else {
+                entry.el.style.visibility = 'visible';
+                kept.push(entry.rect);
+            }
+        }
+    };
 
     return (
         <div className="flex flex-col md:flex-row h-full overflow-hidden">
             {/* MAP */}
-            <div className={`w-full md:w-[60%] transition-all duration-300 relative z-0 shadow-md order-1 md:order-1 overflow-hidden pointer-events-auto ${isMapCollapsed ? 'h-0 opacity-0' : 'h-[32%] md:h-full'}`}>
+            <div className={`w-full md:w-[60%] relative z-0 shadow-md order-1 overflow-hidden ${isMapCollapsed ? 'h-0 opacity-0' : 'h-[32%] md:h-full'}`}>
                 <div
                     ref={mapRef}
-                    className="w-full h-full bg-gray-200 pointer-events-auto"
+                    className="w-full h-full bg-gray-200"
                     style={{
-                        transform: compassMode && userLocation?.heading ? `rotate(${-userLocation.heading}deg) scale(1.2)` : 'none',
+                        transform: compassMode && userLocation?.heading ? `rotate(${-(userLocation.heading)}deg) scale(1.2)` : 'none',
                         transition: 'transform 0.4s ease-out',
-                        transformOrigin: '50% 50%'
+                        transformOrigin: '50% 50%',
+                        willChange: 'transform',
                     }}
                 />
 
@@ -469,88 +542,28 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
 
             {/* LIST */}
             <div className={`w-full md:w-[40%] transition-all duration-300 bg-gray-50 flex flex-col border-l border-gray-200 order-2 md:order-2 shadow-inner relative z-10 ${isMapCollapsed ? 'h-full' : 'h-[68%] md:h-full'}`}>
-                <div 
-                    className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] bg-white border-b shadow-sm shrink-0"
-                    style={{ gridTemplateRows: showListHeader ? '1fr' : '0fr', opacity: showListHeader ? 1 : 0 }}
-                >
-                    <div className="overflow-hidden px-2.5 py-1.5 md:p-3 flex items-center justify-between gap-2">
-                        <h3 className="font-bold text-gray-700 flex items-center gap-1.5 text-sm md:text-base min-w-0">
-                            <MapPin size={15} className="text-blue-600 shrink-0" />
-                            <span className="truncate">Cần thu ({sortedBills.length})</span>
-                            {sortedBills.length > MAX_MAP_MARKERS && (
-                                <span
-                                    className="shrink-0 text-[10px] font-bold text-orange-500 bg-orange-50 w-6 h-6 rounded-full border border-orange-200 flex items-center justify-center"
-                                    title={`Chỉ hiển thị ${MAX_MAP_MARKERS} điểm gần nhất trên bản đồ`}
-                                >
-                                    {MAX_MAP_MARKERS}
-                                </span>
-                            )}
-                        </h3>
-                        <button
-                            onClick={() => setIsMapCollapsed(!isMapCollapsed)}
-                            className="md:hidden shrink-0 w-8 h-8 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors shadow-sm"
-                            title={isMapCollapsed ? "Hiện bản đồ" : "Ẩn bản đồ"}
-                        >
-                            {isMapCollapsed ? <MapIcon size={15} /> : <EyeOff size={15} />}
-                        </button>
-                    </div>
+                <div className="px-2.5 py-1.5 md:p-3 bg-white border-b shadow-sm flex items-center justify-between gap-2 shrink-0">
+                    <h3 className="font-bold text-gray-700 flex items-center gap-1.5 text-sm md:text-base min-w-0">
+                        <MapPin size={15} className="text-blue-600 shrink-0" />
+                        <span className="truncate">Cần thu ({sortedBills.length})</span>
+                        {sortedBills.length > MAX_MAP_MARKERS && (
+                            <span
+                                className="shrink-0 text-[10px] font-bold text-orange-500 bg-orange-50 w-6 h-6 rounded-full border border-orange-200 flex items-center justify-center"
+                                title={`Chỉ hiển thị ${MAX_MAP_MARKERS} điểm gần nhất trên bản đồ`}
+                            >
+                                {MAX_MAP_MARKERS}
+                            </span>
+                        )}
+                    </h3>
+                    <button
+                        onClick={() => setIsMapCollapsed(!isMapCollapsed)}
+                        className="md:hidden shrink-0 w-8 h-8 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors shadow-sm"
+                        title={isMapCollapsed ? "Hiện bản đồ" : "Ẩn bản đồ"}
+                    >
+                        {isMapCollapsed ? <MapIcon size={15} /> : <EyeOff size={15} />}
+                    </button>
                 </div>
-                <div 
-                    className="flex-1 overflow-y-auto p-2 space-y-2"
-                    onScroll={(e) => {
-                        // Không tự động ẩn header trên PC (chỉ áp dụng trên Mobile < 768px)
-                        if (window.innerWidth >= 768) return;
-
-                        const currentScrollY = e.currentTarget.scrollTop;
-                        const delta = currentScrollY - lastListScrollY.current;
-                        lastListScrollY.current = currentScrollY;
-
-                        const now = Date.now();
-                        // Cooldown 600ms giữa các lần đổi trạng thái để tránh giật lag do quán tính cuộn iPhone
-                        const isCoolingDown = now - lastStateChangeTime.current < 600;
-
-                        // Luôn hiện khi cuộn về sát đỉnh đầu trang (scrollTop <= 5px)
-                        if (currentScrollY <= 5) {
-                            accumScrollDelta.current = 0;
-                            if (!showListHeader && !isCoolingDown) {
-                                setShowListHeader(true);
-                                onScrollDirection?.('top');
-                                lastStateChangeTime.current = now;
-                            }
-                            return;
-                        }
-                        
-                        // Bỏ qua khi cuộn lố ở cuối trang (iOS rubber-banding)
-                        if (currentScrollY + e.currentTarget.clientHeight >= e.currentTarget.scrollHeight - 10) return;
-
-                        // Đổi hướng cuộn => reset tích lũy
-                        if ((delta > 0 && accumScrollDelta.current < 0) || (delta < 0 && accumScrollDelta.current > 0)) {
-                            accumScrollDelta.current = 0;
-                        }
-                        accumScrollDelta.current += delta;
-
-                        if (isCoolingDown) return;
-
-                        // Yêu cầu kéo XUỐNG rất dài (> 120px) mới ẩn
-                        if (accumScrollDelta.current > 120) {
-                            if (showListHeader) {
-                                setShowListHeader(false);
-                                onScrollDirection?.('down');
-                                lastStateChangeTime.current = now;
-                            }
-                            accumScrollDelta.current = 0;
-                        } 
-                        // Yêu cầu kéo LÊN rất dài (> 220px) mới hiện lại
-                        else if (accumScrollDelta.current < -220) {
-                            if (!showListHeader) {
-                                setShowListHeader(true);
-                                onScrollDirection?.('up');
-                                lastStateChangeTime.current = now;
-                            }
-                            accumScrollDelta.current = 0;
-                        }
-                    }}
-                >
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
                     {sortedBills.length === 0 ? (
                         <div className="text-center p-8 text-gray-400 text-sm">
                             <p className="mb-2">Tuyệt vời! Không còn hóa đơn nào cần thu ở các vị trí đã định vị.</p>
@@ -1359,96 +1372,88 @@ const App: React.FC = () => {
             <input type="file" accept=".xlsx, .xls" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
             <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} config={sheetConfig} onSave={(newConfig) => { setSheetConfig(newConfig); saveSheetConfig(newConfig); if (newConfig.enabled && newConfig.url !== sheetConfig.url) window.location.reload(); }} />
 
-            <div 
-                className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] z-50 shadow-md bg-white shrink-0"
-                style={{ 
-                    gridTemplateRows: (showHeader || (typeof window !== 'undefined' && window.innerWidth >= 768)) ? '1fr' : '0fr',
-                    opacity: (showHeader || (typeof window !== 'undefined' && window.innerWidth >= 768)) ? 1 : 0 
-                }}
-            >
-                <div className="overflow-hidden">
-                    <header className="bg-blue-700 text-white p-2 md:p-3">
-                        <div className="max-w-7xl mx-auto flex items-center justify-between">
-                            <div className="flex items-center gap-1 md:gap-2">
-                                <FileText className="w-5 h-5 md:w-6 md:h-6" />
-                                <h1 className="text-base md:text-xl font-bold tracking-tight truncate max-w-[120px] md:max-w-none">VNPT Bill</h1>
-                                <div className="flex items-center gap-2">
-                                    {pendingSync > 0 && <div className="hidden md:flex items-center gap-1 bg-yellow-500 text-white text-[10px] px-2 py-0.5 rounded-full border border-yellow-400 font-bold animate-pulse"><CloudOff className="w-3 h-3" /><span>{pendingSync} chờ sync</span></div>}
-                                    {sheetConfig.enabled ? (
-                                        <div className={`hidden md:flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${isSyncing ? 'bg-green-600 border-green-400' : pendingSync > 0 ? 'bg-yellow-500/20 text-yellow-100 border-yellow-500/50' : 'bg-green-500/20 text-green-100 border-green-500/30'}`}>
-                                            {isSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : pendingSync > 0 ? <WifiOff className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
-                                            <span>{isSyncing ? 'SYNC' : 'ONLINE'}</span>
-                                        </div>
-                                    ) : (<div className="hidden md:flex items-center gap-1 bg-gray-500/20 text-gray-200 text-[10px] px-2 py-0.5 rounded-full border border-gray-500/30"><CloudOff className="w-3 h-3" /><span>OFFLINE</span></div>)}
-                                </div>
-                            </div>
-
-                            {/* GPS INDICATOR IN HEADER (Desktop Only) */}
-                            <div className="hidden md:block flex items-center text-xs gap-1">
-                                <span className="opacity-70">Độ chính xác:</span> <GpsIndicatorCompact />
-                            </div>
-
+            <div className="sticky top-0 z-50 shadow-md bg-white shrink-0">
+                <header className="bg-blue-700 text-white p-2 md:p-3">
+                    <div className="max-w-7xl mx-auto flex items-center justify-between">
+                        <div className="flex items-center gap-1 md:gap-2">
+                            <FileText className="w-5 h-5 md:w-6 md:h-6" />
+                            <h1 className="text-base md:text-xl font-bold tracking-tight truncate max-w-[120px] md:max-w-none">VNPT Bill</h1>
                             <div className="flex items-center gap-2">
-                                <div className="flex bg-blue-800 rounded p-0.5 mr-2">
-                                    <button onClick={() => setActiveTab('list')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'list' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><List size={16} /> <span className="hidden sm:inline">DS</span></button>
-                                    <button onClick={() => setActiveTab('map')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'map' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><MapIcon size={16} /> <span className="hidden sm:inline">Bản đồ</span></button>
-                                    <button onClick={() => setActiveTab('report')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'report' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><LayoutDashboard size={16} /> <span className="hidden sm:inline">Thống kê</span></button>
-                                </div>
-                                {activeTab === 'list' && (
-                                    <div className="flex items-center gap-1">
-                                        <button onClick={() => setShowSettings(true)} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow-sm" title="Cấu hình"><Settings className="w-4 h-4" /></button>
-                                        {sheetConfig.enabled ? (
-                                            <div className="relative"><button onClick={handleRefresh} className="bg-green-600 hover:bg-green-500 text-white p-2 rounded shadow-sm"><RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} /></button>{pendingSync > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] w-4 h-4 flex items-center justify-center rounded-full border border-white font-bold">{pendingSync}</span>}</div>
-                                        ) : (<><button onClick={handlePasteData} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow-sm"><ClipboardPaste className="w-4 h-4" /></button><button onClick={() => fileInputRef.current?.click()} className="bg-green-600 hover:bg-green-700 text-white p-2 rounded shadow-sm"><Upload className="w-4 h-4" /></button></>)}
-                                        <button onClick={handleCreateNewBill} className="bg-white text-blue-700 px-2 py-1.5 md:px-3 rounded shadow-md flex items-center gap-1 active:scale-95"><Plus className="w-4 h-4" /><span className="hidden sm:inline font-bold text-xs uppercase">Tạo</span></button>
-                                        {!sheetConfig.enabled && bills.length > 0 && <button onClick={handleDeleteAll} className="hidden md:flex bg-red-600 hover:bg-red-500 text-white p-2 rounded shadow-sm"><Trash2 className="w-4 h-4" /></button>}
+                                {pendingSync > 0 && <div className="hidden md:flex items-center gap-1 bg-yellow-500 text-white text-[10px] px-2 py-0.5 rounded-full border border-yellow-400 font-bold animate-pulse"><CloudOff className="w-3 h-3" /><span>{pendingSync} chờ sync</span></div>}
+                                {sheetConfig.enabled ? (
+                                    <div className={`hidden md:flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${isSyncing ? 'bg-green-600 border-green-400' : pendingSync > 0 ? 'bg-yellow-500/20 text-yellow-100 border-yellow-500/50' : 'bg-green-500/20 text-green-100 border-green-500/30'}`}>
+                                        {isSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : pendingSync > 0 ? <WifiOff className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
+                                        <span>{isSyncing ? 'SYNC' : 'ONLINE'}</span>
                                     </div>
-                                )}
+                                ) : (<div className="hidden md:flex items-center gap-1 bg-gray-500/20 text-gray-200 text-[10px] px-2 py-0.5 rounded-full border border-gray-500/30"><CloudOff className="w-3 h-3" /><span>OFFLINE</span></div>)}
                             </div>
                         </div>
-                    </header>
-                    {pendingSync > 0 && <div className="md:hidden bg-yellow-100 text-yellow-800 text-[10px] py-1 px-3 text-center font-bold border-b border-yellow-200 flex justify-center items-center gap-1"><CloudOff size={10} /> Đang lưu {pendingSync} thay đổi offline.</div>}
-                    {(activeTab === 'list' || activeTab === 'map') && (
-                        <div className="bg-white p-2 border-b shadow-sm">
-                            <div className="max-w-7xl mx-auto flex items-center gap-2">
-                                {/* Search Input - Flexible */}
-                                <div className="relative flex-1">
-                                    <input type="text" placeholder="Tìm tên, sđt..." className="w-full border rounded px-2 py-2 pl-8 bg-gray-50 text-base md:text-sm focus:ring-2 focus:ring-blue-500 outline-none h-[40px]" value={filterName} onChange={(e) => setFilterName(e.target.value)} />
-                                    <Search className="w-4 h-4 text-gray-400 absolute left-2.5 top-3" />
-                                    {filterName && <button onClick={() => setFilterName('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 rounded-full text-gray-400"><X size={16} /></button>}
-                                </div>
 
-                                {/* GPS Indicator - Compact */}
-                                <div className="md:hidden shrink-0 flex items-center justify-center w-[30px] h-[40px] bg-gray-50 border rounded">
-                                    <GpsIndicatorCompact />
-                                </div>
+                        {/* GPS INDICATOR IN HEADER (Desktop Only) */}
+                        <div className="hidden md:block flex items-center text-xs gap-1">
+                            <span className="opacity-70">Độ chính xác:</span> <GpsIndicatorCompact />
+                        </div>
 
-                                {/* Compact Toggle Buttons */}
-                                <div className="flex gap-1 shrink-0">
-                                    <button
-                                        onClick={() => setSortPrintedBottom(!sortPrintedBottom)}
-                                        className={`h-[40px] px-3 rounded border flex items-center gap-1 text-xs font-bold transition-all ${sortPrintedBottom ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                                        title="Ẩn/Hiện hoá đơn đã in xuống dưới"
-                                    >
-                                        <EyeOff size={16} /> Ẩn In
-                                    </button>
-                                    <button
-                                        onClick={() => setSortStatusBottom(!sortStatusBottom)}
-                                        className={`h-[40px] px-3 rounded border flex items-center gap-1 text-xs font-bold transition-all ${sortStatusBottom ? 'bg-orange-100 text-orange-700 border-orange-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                                        title="Đẩy hoá đơn có Status xuống dưới"
-                                    >
-                                        <ArrowDownWideNarrow size={16} /> Ẩn Lỗi
-                                    </button>
+                        <div className="flex items-center gap-2">
+                            <div className="flex bg-blue-800 rounded p-0.5 mr-2">
+                                <button onClick={() => setActiveTab('list')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'list' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><List size={16} /> <span className="hidden sm:inline">DS</span></button>
+                                <button onClick={() => setActiveTab('map')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'map' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><MapIcon size={16} /> <span className="hidden sm:inline">Bản đồ</span></button>
+                                <button onClick={() => setActiveTab('report')} className={`flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-1.5 rounded text-xs font-bold uppercase transition-colors ${activeTab === 'report' ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-200 hover:text-white'}`}><LayoutDashboard size={16} /> <span className="hidden sm:inline">Thống kê</span></button>
+                            </div>
+                            {activeTab === 'list' && (
+                                <div className="flex items-center gap-1">
+                                    <button onClick={() => setShowSettings(true)} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow-sm" title="Cấu hình"><Settings className="w-4 h-4" /></button>
+                                    {sheetConfig.enabled ? (
+                                        <div className="relative"><button onClick={handleRefresh} className="bg-green-600 hover:bg-green-500 text-white p-2 rounded shadow-sm"><RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} /></button>{pendingSync > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] w-4 h-4 flex items-center justify-center rounded-full border border-white font-bold">{pendingSync}</span>}</div>
+                                    ) : (<><button onClick={handlePasteData} className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded shadow-sm"><ClipboardPaste className="w-4 h-4" /></button><button onClick={() => fileInputRef.current?.click()} className="bg-green-600 hover:bg-green-700 text-white p-2 rounded shadow-sm"><Upload className="w-4 h-4" /></button></>)}
+                                    <button onClick={handleCreateNewBill} className="bg-white text-blue-700 px-2 py-1.5 md:px-3 rounded shadow-md flex items-center gap-1 active:scale-95"><Plus className="w-4 h-4" /><span className="hidden sm:inline font-bold text-xs uppercase">Tạo</span></button>
+                                    {!sheetConfig.enabled && bills.length > 0 && <button onClick={handleDeleteAll} className="hidden md:flex bg-red-600 hover:bg-red-500 text-white p-2 rounded shadow-sm"><Trash2 className="w-4 h-4" /></button>}
                                 </div>
+                            )}
+                        </div>
+                    </div>
+                </header>
+                {pendingSync > 0 && <div className="md:hidden bg-yellow-100 text-yellow-800 text-[10px] py-1 px-3 text-center font-bold border-b border-yellow-200 flex justify-center items-center gap-1"><CloudOff size={10} /> Đang lưu {pendingSync} thay đổi offline.</div>}
+                {(activeTab === 'list' || activeTab === 'map') && (
+                    <div className="bg-white p-2 border-b shadow-sm">
+                        <div className="max-w-7xl mx-auto flex items-center gap-2">
+                            {/* Search Input - Flexible */}
+                            <div className="relative flex-1">
+                                <input type="text" placeholder="Tìm tên, sđt..." className="w-full border rounded px-2 py-2 pl-8 bg-gray-50 text-base md:text-sm focus:ring-2 focus:ring-blue-500 outline-none h-[40px]" value={filterName} onChange={(e) => setFilterName(e.target.value)} />
+                                <Search className="w-4 h-4 text-gray-400 absolute left-2.5 top-3" />
+                                {filterName && <button onClick={() => setFilterName('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 rounded-full text-gray-400"><X size={16} /></button>}
+                            </div>
+
+                            {/* GPS Indicator - Compact */}
+                            <div className="md:hidden shrink-0 flex items-center justify-center w-[30px] h-[40px] bg-gray-50 border rounded">
+                                <GpsIndicatorCompact />
+                            </div>
+
+                            {/* Compact Toggle Buttons */}
+                            <div className="flex gap-1 shrink-0">
+                                <button
+                                    onClick={() => setSortPrintedBottom(!sortPrintedBottom)}
+                                    className={`h-[40px] px-3 rounded border flex items-center gap-1 text-xs font-bold transition-all ${sortPrintedBottom ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                                    title="Ẩn/Hiện hoá đơn đã in xuống dưới"
+                                >
+                                    <EyeOff size={16} /> Ẩn In
+                                </button>
+                                <button
+                                    onClick={() => setSortStatusBottom(!sortStatusBottom)}
+                                    className={`h-[40px] px-3 rounded border flex items-center gap-1 text-xs font-bold transition-all ${sortStatusBottom ? 'bg-orange-100 text-orange-700 border-orange-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                                    title="Đẩy hoá đơn có Status xuống dưới"
+                                >
+                                    <ArrowDownWideNarrow size={16} /> Ẩn Lỗi
+                                </button>
                             </div>
                         </div>
-                    )}
-                </div>
+                    </div>
+                )}
             </div>
 
             <div className="flex-1 relative overflow-hidden flex flex-col">
                 {activeTab === 'report' ? <Dashboard bills={bills} /> : activeTab === 'map' ? (
-                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} onScrollDirection={(dir) => setShowHeader(dir === 'up' || dir === 'top')} />
+                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} />
                 ) : (
                     <main className="flex-1 overflow-y-auto max-w-full pb-20">
                         <div className="bg-white border-b border-gray-200">
