@@ -79,6 +79,7 @@ interface MapTabProps {
     onEditBill: (bill: Bill) => void;
     onUpdateBill: (id: string, updates: Partial<Bill>) => void;
     onPrintQR: (bill: Bill) => void;
+    isActive?: boolean; // Để trigger invalidateSize khi tab map được hiện lại
 }
 
 // Giới hạn số markers trên bản đồ để tối ưu hiệu suất mobile
@@ -94,7 +95,7 @@ const rectsOverlap = (a: DOMRect, b: DOMRect, padding: number = 2): boolean => {
     );
 };
 
-const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR }) => {
+const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compassPermissionGranted, onRequestCompass, onToggleCompass, onCancelCompass, onBillClick, onEditBill, onUpdateBill, onPrintQR, isActive }) => {
     const mapRef = useRef<HTMLDivElement>(null);
     const leafletMap = useRef<L.Map | null>(null);
     const markersRef = useRef<{ marker: L.CircleMarker; bill: Bill & { distance: number; lat: number; lng: number } }[]>([]);
@@ -118,6 +119,16 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
             return () => clearTimeout(timer);
         }
     }, [isMapCollapsed]);
+
+    // Khi tab map được active lại (CSS hidden → visible), Leaflet cần biết kích thước đúng
+    // Fix white screen trên iPhone 15 Pro và desktop
+    useEffect(() => {
+        if (!isActive || !leafletMap.current) return;
+        const t1 = setTimeout(() => leafletMap.current?.invalidateSize({ animate: false }), 50);
+        const t2 = setTimeout(() => leafletMap.current?.invalidateSize({ animate: false }), 200);
+        const t3 = setTimeout(() => leafletMap.current?.invalidateSize({ animate: false }), 500);
+        return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    }, [isActive]);
 
     // 1. Calculate Distances & Filter
     useEffect(() => {
@@ -214,9 +225,17 @@ const MapTab: React.FC<MapTabProps> = ({ bills, userLocation, compassMode, compa
         };
         window.addEventListener('resize', handleResize);
 
-        const timer = setTimeout(() => { map.invalidateSize(); }, 200);
+        // Cascade invalidateSize để fix white screen trên desktop và iPhone 15 Pro
+        // Container cần nhiều lần để layout CSS responsive ổn định trên các viewport khác nhau
+        const timer1 = setTimeout(() => { map.invalidateSize({ animate: false }); }, 100);
+        const timer2 = setTimeout(() => { map.invalidateSize({ animate: false }); }, 300);
+        const timer3 = setTimeout(() => { map.invalidateSize({ animate: false }); }, 600);
+        const timer4 = setTimeout(() => { map.invalidateSize({ animate: false }); }, 1000);
         return () => {
-            clearTimeout(timer);
+            clearTimeout(timer1);
+            clearTimeout(timer2);
+            clearTimeout(timer3);
+            clearTimeout(timer4);
             window.removeEventListener('resize', handleResize);
             if (leafletMap.current) {
                 leafletMap.current.remove();
@@ -1475,9 +1494,13 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex-1 relative overflow-hidden flex flex-col">
-                {activeTab === 'report' ? <Dashboard bills={bills} /> : activeTab === 'map' ? (
-                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} />
-                ) : (
+                {activeTab === 'report' ? <Dashboard bills={bills} /> : (
+                <>
+                {/* MapTab luôn mounted để tránh Leaflet reinit mỗi lần switch tab → white screen */}
+                <div className={activeTab === 'map' ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+                    <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} isActive={activeTab === 'map'} />
+                </div>
+
                     <main className="flex-1 overflow-y-auto max-w-full pb-20">
                         <div className="bg-white border-b border-gray-200">
                             {/* --- MOBILE LIST VIEW (Vertical Layout) --- */}
@@ -1655,6 +1678,8 @@ const App: React.FC = () => {
                             </div>
                         </div>
                     </main>
+                )}
+                </>
                 )}
             </div>
 
