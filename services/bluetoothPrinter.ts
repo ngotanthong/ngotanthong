@@ -288,7 +288,8 @@ export const printBillBluetooth = async (bill: Bill) => {
   };
 
   add(...CMD.INIT);
-
+  nl();
+  nl();
   add(...CMD.CENTER);
   add(...CMD.BOLD_ON);
   text("VNPT BAC BUON MA THUOT"); nl();
@@ -296,8 +297,9 @@ export const printBillBluetooth = async (bill: Bill) => {
   text("Dia chi: 219 Ngo Quyen, Buon Ma Thuot, Dak Lak"); nl();
   text("--------------------------------"); nl();
 
-  add(...CMD.BOLD_ON);
+
   text("THONG BAO CUOC"); nl();
+  add(...CMD.BOLD_ON);
   text(`Ky cuoc: ${bill.period}`); nl();
   add(...CMD.BOLD_OFF);
   nl();
