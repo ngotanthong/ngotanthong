@@ -1501,6 +1501,8 @@ const App: React.FC = () => {
                     <MapTab bills={filteredBills} userLocation={gpsSignal} compassMode={compassMode} compassPermissionGranted={compassPermissionGranted} onRequestCompass={requestCompassPermission} onToggleCompass={() => setCompassMode(!compassMode)} onCancelCompass={() => setCompassMode(false)} onBillClick={handleMapBillClick} onEditBill={handleMapEditClick} onUpdateBill={updateBillDataLocally} onPrintQR={handleActionPrintQR} isActive={activeTab === 'map'} />
                 </div>
 
+                {/* List tab — chỉ hiện khi không phải map tab */}
+                {activeTab === 'list' && (
                     <main className="flex-1 overflow-y-auto max-w-full pb-20">
                         <div className="bg-white border-b border-gray-200">
                             {/* --- MOBILE LIST VIEW (Vertical Layout) --- */}
