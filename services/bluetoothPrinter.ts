@@ -292,6 +292,8 @@ export const printBillBluetooth = async (bill: Bill) => {
   nl();
   nl();
   nl();
+  nl();
+
   add(...CMD.CENTER);
   add(...CMD.BOLD_ON);
   text("VNPT BAC BUON MA THUOT"); nl();
@@ -326,7 +328,7 @@ export const printBillBluetooth = async (bill: Bill) => {
   add(...CMD.CENTER);
   text("--------------------------------"); nl();
   add(...CMD.LEFT);
-  textLR("", bill.staff.code); nl();
+  text(bill.staff.code); nl();
   text("--------------------------------");
   add(...CMD.CENTER);
   const now = new Date();
@@ -334,7 +336,11 @@ export const printBillBluetooth = async (bill: Bill) => {
   textLR("Thoi gian:", timeStr); nl();
   text("--------------------------------"); nl();
 
-  nl(); nl();
+  nl();
+  nl();
+  nl();
+  nl();
+  nl();
 
   await sendData(new Uint8Array(commands));
 };
