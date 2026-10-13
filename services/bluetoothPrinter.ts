@@ -290,18 +290,18 @@ export const printBillBluetooth = async (bill: Bill) => {
   add(...CMD.INIT);
   nl();
   nl();
+  nl();
+  nl();
   add(...CMD.CENTER);
   add(...CMD.BOLD_ON);
   text("VNPT BAC BUON MA THUOT"); nl();
   add(...CMD.BOLD_OFF);
   text("Dia chi: 219 Ngo Quyen, Buon Ma Thuot, Dak Lak"); nl();
   text("--------------------------------"); nl();
-
-
-  text("THONG BAO CUOC"); nl();
   add(...CMD.BOLD_ON);
-  text(`Ky cuoc: ${bill.period}`); nl();
+  text("THONG BAO CUOC"); nl();
   add(...CMD.BOLD_OFF);
+  text(`Ky cuoc: ${bill.period}`); nl();
   nl();
 
   add(...CMD.LEFT);
@@ -334,7 +334,7 @@ export const printBillBluetooth = async (bill: Bill) => {
   textLR("Thoi gian:", timeStr); nl();
   text("--------------------------------"); nl();
 
-  nl(); nl(); nl(); nl();
+  nl(); nl();
 
   await sendData(new Uint8Array(commands));
 };
